@@ -172,10 +172,20 @@ class BaseMegatronTrainer(ABC):
                     v = v[0] / v[1]
                 v = v.item()
             logs[k] = v
+        if self.fp8_telemetry is not None:
+            logs.update({f'fp8_grouped_gemm_{key}': value for key, value in self.fp8_telemetry.take_delta().items()})
 
     def prepare_model(self):
         args = self.args
+        if args.fp8_expert_only and (args.fp8_format is None or args.fp8_recipe != 'delayed' or args.fp8_param_gather):
+            raise ValueError('fp8_expert_only requires delayed FP8 with a format and fp8_param_gather=false')
         self.unwrapped_models = get_mcore_model(args, self.template.config)
+        from swift.megatron.fp8 import GroupedGemmTelemetry, configure_expert_fp8
+        self.fp8_scope = configure_expert_fp8(self.unwrapped_models, args.fp8_expert_only)
+        self.fp8_telemetry = None
+        if args.fp8_telemetry:
+            self.fp8_telemetry = GroupedGemmTelemetry()
+            self.fp8_telemetry.install()
         self.config = self.unwrapped_models[0].config
         logger.info(f'model_config: {self.config}')
         self.bridge = self.config.bridge
